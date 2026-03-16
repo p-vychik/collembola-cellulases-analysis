@@ -1,0 +1,362 @@
+#!/usr/bin/env nextflow
+
+process RETRIEVE_SEQ {
+   publishDir "$params.outdir/$gene/fasta"
+   errorStrategy "ignore"
+   input:
+   val gene
+   each fasta_source
+   
+   output:
+   tuple val(gene), path("*.fa"), emit:out
+   
+   script:
+   """
+   fileName=\$(basename '$fasta_source')
+   grep -A 1 --no-group-separator -P "$gene\.*[^0]\$" $fasta_source >> ./${gene}_\$fileName
+   """
+}
+
+process MERGE {
+   errorStrategy "ignore"
+   publishDir "$params.outdir/$gene/fasta"
+   input:
+   tuple val(gene), path(files_path)
+   
+   output:
+   tuple val(gene), path("${gene}_merged.fa"), path("${gene}_cell_wall_tax_ids"), path("${gene}_soil_i_tax_ids_total"), emit:out
+   
+   script:
+   """
+   cat ${files_path} > "${gene}_merged.fa"
+   cat ${gene}_cell_wall.extended.fa | grep ">" | cut -d @ -f 2 | sort | uniq > "${gene}_cell_wall_tax_ids"
+   cat ${gene}_cwde_soil_i_representatives_og.fa | grep ">" | cut -d @ -f 2 > "${gene}_soil_i_tax_ids_total"
+   """
+}
+
+process GET_REPRESENTATIVE_TAXFUN_SEQ {
+   errorStrategy "ignore"
+   publishDir "$params.outdir/$gene/fasta"
+   conda '' // Provide path to the conda environment with installed phyloprofile
+   
+   input:
+   tuple val(gene), path(merged_seq), path(cell_wall_tax_ids), path(soil_i_tax_ids_total)
+   
+   output:
+   tuple val(gene), path(merged_seq), path("${gene}_soil_i_tax_ids_uniq"), path("${gene}_representative_ids"), env(var_soil_ids_num), path("${gene}_representative_merged.fa"), emit:out
+
+   script:
+   """
+   /home/pavel/project/nextflow_pipe/representative.R ${cell_wall_tax_ids}
+   cat ${cell_wall_tax_ids}.representative | sed '1d' | cut -f 1 | sort | uniq > "${gene}_representative_ids"
+   var_soil_ids_num=\$(wc -l < ${soil_i_tax_ids_total})
+   cat ${soil_i_tax_ids_total} | sort | uniq > "${gene}_soil_i_tax_ids_uniq"
+   cat "${gene}_representative_ids" "${gene}_soil_i_tax_ids_uniq" > ${gene}_filter_ids
+   for id in \$(cat ${gene}_filter_ids | sort | uniq); do grep --no-group-separator -A 1 "@\$id@" < ${merged_seq} >> "${gene}_representative_merged.fa" ; done
+   """
+}
+
+process MUSCLE {
+   errorStrategy "ignore"
+   publishDir "$params.outdir/$gene/fasta"
+   conda '' // Provide path to the conda environment with installed muscle
+   
+   input:
+   tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids)
+   // tuple val(gene), path(merged_seq), path(input_fa)
+   
+   output:
+   tuple val(gene), path ("${gene}_msa.fa"), path(soil_i_tax_ids)
+   
+   script:
+   """
+   muscle -super5 ${merged_seq} -output ${gene}_msa.fa   
+   """
+}
+
+process REDUCE_MUSCLE {
+   errorStrategy "ignore"
+   publishDir "$params.outdir/$gene/fasta"
+   conda '' // Provide path to the conda environment with installed muscle
+   input:
+   tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids)
+   // tuple val(gene), path(merged_seq), path(input_fa)
+   
+   output:
+   tuple val(gene), path ("${gene}_msa.fa"), path(soil_i_tax_ids)
+   
+   script:
+   """
+   muscle -super5 ${merged_seq} -output ${gene}_msa.fa
+   """
+}
+
+process REMOVE_GAPS {
+   errorStrategy "ignore"
+   publishDir "$params.outdir/$gene/fasta"
+   input:
+   tuple val(gene), path(msa_fasta), path(soil_inv_ids) 
+   
+   output:
+   tuple val(gene), path("${gene}_msa_cleaned.fa"), path(soil_inv_ids)
+   
+   script:
+    """
+    /home/pavel/project/nextflow_pipe/degaper.py "${msa_fasta}" "${gene}_msa_cleaned.fa"
+    """
+}
+
+process REDUCE_REMOVE_GAPS {
+   errorStrategy "ignore"
+   publishDir "$params.outdir/$gene/fasta"
+   input:
+   // tuple val(gene), path(msa_fasta)
+   tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids), path(soil_inv_msa)
+   
+   output:
+   // tuple val(gene), path("${gene}_msa_cleaned.fa")
+   tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids), path("reduce_${gene}_msa_cleaned.fa")
+   
+   script:
+    """
+    /home/pavel/project/nextflow_pipe/degaper.py "${soil_inv_msa}" "reduce_${gene}_msa_cleaned.fa"
+    """
+}
+
+process REDUCE_REMOVE_GAPS_2 {
+   errorStrategy "ignore"
+   publishDir "$params.outdir/$gene/fasta"
+   input:
+   tuple val(gene), path(msa_fasta), path(soil_inv_ids)
+   
+   output:
+   tuple val(gene), path("reduce_2_${gene}_msa_cleaned.fa"), path(soil_inv_ids)
+   
+   script:
+    """
+    /home/pavel/project/nextflow_pipe/degaper.py "${msa_fasta}" "reduce_2_${gene}_msa_cleaned.fa"
+    """
+}
+
+process RAPIDNJ {
+   errorStrategy "ignore"
+   publishDir "$params.outdir/$gene/tree"
+   conda '' // Provide path to conda environment with rapidnj installed
+   input:
+   tuple val(gene), path(cleaned_msa), path(soil_inv_ids)
+   
+   output:
+   tuple val(gene), path("${gene}_rapidnj"), path(cleaned_msa), path(soil_inv_ids)
+   
+   script:
+   """
+   rapidnj "${cleaned_msa}" -x "${gene}_rapidnj"
+   """
+}
+
+process REDUCE_RAPIDNJ {
+   errorStrategy "ignore"
+   publishDir "$params.outdir/$gene/tree"
+   conda '' // Provide path to conda environment with rapidnj installed
+   input:
+   tuple val(gene), path(cleaned_msa), path(soil_inv_ids)
+   
+   output:
+   tuple val(gene), path("reduce_${gene}_rapidnj"), path(cleaned_msa), path(soil_inv_ids)
+   
+   script:
+   """
+   rapidnj "${cleaned_msa}" -x "reduce_${gene}_rapidnj"
+   """
+}
+
+process PDA_BALANCE {
+   errorStrategy "ignore"
+   publishDir "$params.outdir/$gene/tree"
+   input:
+   tuple val(gene), path(rapidnj_cluster), path(cleaned_msa), path(soil_inv_ids)
+   
+   output:
+   tuple val(gene), path("${gene}_rapidnj"), path("${rapidnj_cluster}.pda"), path(cleaned_msa)
+   
+   script:
+   """
+   grep -o "'[^']*'" ${rapidnj_cluster} > "${gene}_rapidnj_headers"
+   seq_number=\$(wc -l < "${gene}_rapidnj_headers")
+   if [ "\$seq_number" -gt 300 ]; then
+    # Proceed with pda execution if seq_number > 300
+        for id in \$(cat ${soil_inv_ids} | sort | uniq); do
+             grep --no-group-separator "@\$id@" < "${gene}_rapidnj_headers" >> "${gene}_pda_filter"
+        done
+        pda -k 300 -if "${gene}_pda_filter" "${rapidnj_cluster}"
+    else
+       # Otherwise, write the content of ${gene}_rapidnj_headers to the output file
+        cp "${gene}_rapidnj_headers" "${rapidnj_cluster}.pda"
+   fi
+   """
+}
+
+process REDUCE_PDA_BALANCE {
+   errorStrategy "ignore"
+   publishDir "$params.outdir/$gene/tree"
+   input:
+   tuple val(gene), path(rapidnj_cluster), path(cleaned_msa), path(soil_inv_ids)
+   
+   output:
+   tuple val(gene), path("reduce_${gene}_rapidnj"), path("${rapidnj_cluster}.pda"), path(cleaned_msa)
+   
+   script:
+   """
+   grep -o "'[^']*'" ${rapidnj_cluster} > "${gene}_rapidnj_headers"
+   seq_number=\$(wc -l < "${gene}_rapidnj_headers")
+   
+   if [ "\$seq_number" -gt 300 ]; then
+    # Proceed with pda execution if seq_number > 300
+        for id in \$(cat ${soil_inv_ids} | sort | uniq); do
+            grep --no-group-separator "@\$id@" < "${gene}_rapidnj_headers" >> "${gene}_pda_filter"
+        done
+        pda -k 300 -if "${gene}_pda_filter" "${rapidnj_cluster}"
+    else
+       # Otherwise, write the content of ${gene}_rapidnj_headers to output file without running pda
+        cp "${gene}_rapidnj_headers" "${rapidnj_cluster}.pda"
+   fi
+   """
+}
+process REDUCE_SOIL_INV_ENTRIES {
+   errorStrategy "ignore"
+   publishDir "$params.outdir/$gene/tree"
+   input:
+   // tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids), path(filtered_merged_seq)
+   tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids)
+   output:
+   tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids), path("${gene}_soil_inv.fa")
+   
+   script:
+   """
+   for id in \$(cat ${soil_i_tax_ids} | sort | uniq); do grep --no-group-separator -A 1 "@\$id@" < ${merged_seq} >> "${gene}_soil_inv.fa"; done     
+   """ 
+}
+
+process REDUCE_SOIL_INV_ENTRIES_MSA {
+    errorStrategy "ignore"
+    conda '/home/pavel/miniforge3/envs/muscle'
+    
+    input:
+    tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids), path(soil_inv)
+    output:
+    tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids), path("${gene}_soil_inv_msa.fa")
+    
+    script:
+    """
+    muscle -super5 ${soil_inv} -output ${gene}_soil_inv_msa.fa
+    """
+}
+
+process REDUCE_SOIL_INV_ENTRIES_RAPID_NJ {
+    errorStrategy "ignore"
+    input:
+    tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids), path(soil_inv_msa)
+    output:
+    tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids), path("${gene}_soil_inv_rapidnj")
+    script:
+    """
+    rapidnj "${soil_inv_msa}" -x "${gene}_soil_inv_rapidnj"
+    """
+}
+
+process REDUCE_SOIL_INV_ENTRIES_PDA_MERGE {
+    errorStrategy "ignore"
+    input:
+    tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids), path(soil_inv_rapidnj)
+    output:
+    tuple val(gene), path("${gene}_filtered_merged.fa"), path("${soil_i_tax_ids}_pda_reduced"), path(representative_ids)
+    
+    script:
+    """
+    pda -k 150 "${soil_inv_rapidnj}"
+    grep -o "^'[^']*'" ${soil_inv_rapidnj}.pda | sed "s/^'//;s/'\$//" > ${soil_inv_rapidnj}_soil_inv_reduced
+    cat ${soil_inv_rapidnj}_soil_inv_reduced | cut -d @ -f 2 | sort | uniq > ${soil_i_tax_ids}_pda_reduced
+    for id in \$(cat ${soil_inv_rapidnj}_soil_inv_reduced); do grep -A 1 "\$id" < ${merged_seq} >> "reduced_${gene}_soil_inv_filtered.fa" ; done
+    for id in \$(cat ${representative_ids} | sort | uniq); do grep --no-group-separator -A 1 "@\$id@" < ${merged_seq} >> "reduced_${gene}_cwde_filtered.fa" ; done
+    cat "reduced_${gene}_cwde_filtered.fa" "reduced_${gene}_soil_inv_filtered.fa" > "${gene}_filtered_merged.fa"
+    """
+}
+
+process FINAL_MUSCLE {
+    errorStrategy "ignore"
+    conda '' // Provide the path to conda environment with muscle installed
+    input:
+    tuple val(gene), path(rapidnj_out), path(balanced_tree_content), path(cleaned_msa)
+    output:
+    tuple val(gene), path("${gene}_final_msa.fa")
+        
+    script:
+    """
+    cat ${cleaned_msa} | sed '/^>/!s/-//g' > "${gene}_unbalanced_seq_for_final_msa.fa"
+    grep -o "^'[^']*'" ${balanced_tree_content} | sed "s/^'//;s/'\$//" > ${gene}_filter_for_final_msa
+    for header in \$(cat ${gene}_filter_for_final_msa | sort | uniq); do grep --no-group-separator -A 1 "\$header" < "${gene}_unbalanced_seq_for_final_msa.fa" >> "${gene}_balanced_seq_final_msa.fa"; done
+    muscle -super5 "${gene}_balanced_seq_final_msa.fa" -output ${gene}_final_msa.fa  
+    """
+}
+
+process FINAL_REMOVE_GAPS {
+   publishDir "$params.outdir/$gene/fasta"
+   input:
+   tuple val(gene), path(final_msa_with_gaps)
+   
+   output:
+   tuple val(gene), path("${gene}_final_msa_gaps_removed.fa")
+   
+   script:
+    """
+    ./degaper.py "${final_msa_with_gaps}" "${gene}_final_msa_gaps_removed.fa"
+    """
+}
+
+process IQTREE {
+    publishDir "$params.outdir/$gene/iq-tree", pattern:"${gene}*", mode:"copy"
+    conda '' // Provide the path to conda environment with iqtree installed
+    input:
+    tuple val(gene), path(final_msa_no_gaps)
+   
+    output:
+    tuple val(gene), path("${gene}_iqtree_log")
+   
+    script:
+    """
+    iqtree2 -s ${final_msa_no_gaps} -bb 1000 -alrt 1000 -nt AUTO >> ${gene}_iqtree_log
+    """
+}
+
+
+
+workflow {
+    // Define input files and parameters
+    params.source_fasta = [
+        "./cell_wall.extended.fa",
+        "./cwde_soil_i_representatives_og.fa"
+    ]
+
+    params.reference_gene = ["UKZ51156","XP_013956215","BAJ83820","EDR28415","QRW20161","QRW17901","UKZ50023","UKZ53439","UKZ53593","XP_013955954","XP_955684","QRW24047","QRW17738","QRW19045","QRW27037","QRW25555","QRW25588","QRW26230","XP_012938873","QRW22033","QRW16736","QRW22725","QKD56309","QRW16024","QRW19354","QRW19897","QRW19905"]
+    params.outdir = "selected_genes_run_pool"
+
+    // Create a channel for the query files
+    query_genes = Channel.fromList(params.reference_gene)
+    query_fasta_files = Channel.fromList(params.source_fasta)
+    output = RETRIEVE_SEQ(query_genes, query_fasta_files)
+    representative_seq = MERGE(output.out.groupTuple()) | GET_REPRESENTATIVE_TAXFUN_SEQ  
+    // Branch based on soil_ids_number
+    representative_seq.out.branch { gene, merged_seq, soil_i_tax_ids, representative_ids, soil_ids_number, filtered_merged_seq ->
+        println "$gene has $soil_ids_number entries"
+        to_reduce: soil_ids_number.toInteger() > 150
+            println "$gene is run in reduction mode"
+            return tuple(gene, merged_seq, soil_i_tax_ids, representative_ids)
+        normal: soil_ids_number.toInteger() <= 150
+            return tuple(gene, filtered_merged_seq, soil_i_tax_ids, representative_ids)
+    } | set {divided_seq}
+    normal_pda_output=divided_seq.normal | MUSCLE | REMOVE_GAPS | RAPIDNJ | PDA_BALANCE
+    reduce_pda_output=divided_seq.to_reduce | REDUCE_SOIL_INV_ENTRIES | REDUCE_SOIL_INV_ENTRIES_MSA | REDUCE_REMOVE_GAPS | REDUCE_SOIL_INV_ENTRIES_RAPID_NJ | REDUCE_SOIL_INV_ENTRIES_PDA_MERGE | REDUCE_MUSCLE | REDUCE_REMOVE_GAPS_2 | REDUCE_RAPIDNJ | REDUCE_PDA_BALANCE
+    
+    normal_pda_output.mix(reduce_pda_output) | FINAL_MUSCLE | FINAL_REMOVE_GAPS | IQTREE
+
+}
