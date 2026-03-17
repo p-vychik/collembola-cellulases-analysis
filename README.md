@@ -23,6 +23,11 @@ Jupyter notebook used for:
 
 ---
 
+### `degaper.py`
+Python script used in Nextflow pipeline for filtering MSA columns
+
+---
+
 ### `nextflow_workflow/`
 A **Nextflow pipeline** for automated phylogenetic tree reconstruction.
 

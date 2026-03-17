@@ -47,7 +47,7 @@ process GET_REPRESENTATIVE_TAXFUN_SEQ {
 
    script:
    """
-   /home/pavel/project/nextflow_pipe/representative.R ${cell_wall_tax_ids}
+   ./representative.R ${cell_wall_tax_ids}
    cat ${cell_wall_tax_ids}.representative | sed '1d' | cut -f 1 | sort | uniq > "${gene}_representative_ids"
    var_soil_ids_num=\$(wc -l < ${soil_i_tax_ids_total})
    cat ${soil_i_tax_ids_total} | sort | uniq > "${gene}_soil_i_tax_ids_uniq"
@@ -102,7 +102,7 @@ process REMOVE_GAPS {
    
    script:
     """
-    /home/pavel/project/nextflow_pipe/degaper.py "${msa_fasta}" "${gene}_msa_cleaned.fa"
+    ./degaper.py "${msa_fasta}" "${gene}_msa_cleaned.fa"
     """
 }
 
@@ -119,7 +119,7 @@ process REDUCE_REMOVE_GAPS {
    
    script:
     """
-    /home/pavel/project/nextflow_pipe/degaper.py "${soil_inv_msa}" "reduce_${gene}_msa_cleaned.fa"
+    ./degaper.py "${soil_inv_msa}" "reduce_${gene}_msa_cleaned.fa"
     """
 }
 
@@ -134,7 +134,7 @@ process REDUCE_REMOVE_GAPS_2 {
    
    script:
     """
-    /home/pavel/project/nextflow_pipe/degaper.py "${msa_fasta}" "reduce_2_${gene}_msa_cleaned.fa"
+    ./degaper.py "${msa_fasta}" "reduce_2_${gene}_msa_cleaned.fa"
     """
 }
 
@@ -239,7 +239,7 @@ process REDUCE_SOIL_INV_ENTRIES {
 
 process REDUCE_SOIL_INV_ENTRIES_MSA {
     errorStrategy "ignore"
-    conda '/home/pavel/miniforge3/envs/muscle'
+    conda '' // path to conda envirionment with installed muscle
     
     input:
     tuple val(gene), path(merged_seq), path(soil_i_tax_ids), path(representative_ids), path(soil_inv)
